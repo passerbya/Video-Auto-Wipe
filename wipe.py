@@ -1,11 +1,13 @@
-#!/root/miniconda3/envs/video_auto_wipe/bin/python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
-'''
+
+"""
 Copyright: Copyright(c) 2018, seeprettyface.com, BUPT_GWY contributes the model.
 Thanks to STTN provider: https://github.com/researchmm/STTN
 Author: BUPT_GWY
 Contact: a312863063@126.com
-'''
+"""
+
 import cv2
 import numpy as np
 import importlib
@@ -36,7 +38,8 @@ def get_parser():
     parser.add_argument("-v", "--video", type=str)
     parser.add_argument("-b", "--box", nargs='+', type=int,
                     help='Specify a mask box for the subtilte. Syntax: (top, bottom, left, right).')
-    parser.add_argument("-m", "--mask",  type=str)
+    parser.add_argument("-e", "--exclude_ranges", nargs='+', type=str,
+                        help='Specify exclude time ranges which not recognize. Syntax: (0_13880, 143360_146333).')
     parser.add_argument("-r", "--result",  type=str, default='result/')
     parser.add_argument("-d", "--dual",  type=bool, default=False, help='Whether to display the original video in the final video')
     parser.add_argument("-w", "--weight",   type=str, default='pretrained_weight/detext_trial.pth')
@@ -53,7 +56,7 @@ def read_frame_info_from_video(args):
     if not reader.isOpened():
         print("fail to open video in {}".format(args.video))
         sys.exit(1)
-    frame_info = {'w_ori': int(reader.get(cv2.CAP_PROP_FRAME_WIDTH) + 0.5), 'h_ori': int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT) + 0.5), 'fps': reader.get(cv2.CAP_PROP_FPS), 'len': int(reader.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)}
+    frame_info = {'w_ori': int(reader.get(cv2.CAP_PROP_FRAME_WIDTH)), 'h_ori': int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT)), 'fps': reader.get(cv2.CAP_PROP_FPS), 'len': int(reader.get(cv2.CAP_PROP_FRAME_COUNT))}
     return reader, frame_info
 
 def read_mask(path):
@@ -80,27 +83,24 @@ def pre_process(args):
     writer = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['w_ori'], video_h))
     print('Loading video from: {}'.format(args.video))
     print('Loading box from: {}'.format(args.box))
-    print('Loading mask from: {}'.format(args.mask))
+    print('args: {}'.format(args))
     print('--------------------------------------')
 
     clip_gap = args.gap  # processing how many frames during one period
-    rec_time = frame_info['len'] // clip_gap if frame_info['len'] % clip_gap == 0 else frame_info['len'] // clip_gap + 1
-    if args.box is not None:
-        y11 = args.box[0]
-        y12 = min(frame_info['h_ori'], args.box[1])
-        x11 = args.box[2]
-        x12 = min(frame_info['w_ori'], args.box[3])
-        mask = np.zeros((frame_info['h_ori'], frame_info['w_ori']), dtype="uint8")
-        site = np.array([[[x12, y12], [x11, y12], [x11, y11], [x12, y11]]], dtype=np.int32)
-        cv2.polylines(mask, site, 1, 255)
-        cv2.fillPoly(mask, site, 255)
-        mask_encode = cv2.imencode('.png', mask)[1]
-        img = cv2.imdecode(np.frombuffer(mask_encode.tobytes(), np.uint8), 0)
-        _, img = cv2.threshold(img, 127, 1, cv2.THRESH_BINARY)
-        mask = img[:, :, None]
-    else:
-        mask = read_mask(args.mask)
-    return clip_gap, frame_info, mask, reader, rec_time, video_path, writer
+    rec_times = frame_info['len'] // clip_gap if frame_info['len'] % clip_gap == 0 else frame_info['len'] // clip_gap + 1
+    y11 = args.box[0]
+    y12 = min(frame_info['h_ori'], args.box[1])
+    x11 = args.box[2]
+    x12 = min(frame_info['w_ori'], args.box[3])
+    mask = np.zeros((frame_info['h_ori'], frame_info['w_ori']), dtype="uint8")
+    site = np.array([[[x12, y12], [x11, y12], [x11, y11], [x12, y11]]], dtype=np.int32)
+    cv2.polylines(mask, site, 1, 255)
+    cv2.fillPoly(mask, site, 255)
+    mask_encode = cv2.imencode('.png', mask)[1]
+    img = cv2.imdecode(np.frombuffer(mask_encode.tobytes(), np.uint8), 0)
+    _, img = cv2.threshold(img, 127, 1, cv2.THRESH_BINARY)
+    mask = img[:, :, None]
+    return clip_gap, frame_info, mask, reader, rec_times, video_path, writer
 
 def process(args, frames, model, device, w, h):
     video_length = len(frames)
@@ -178,7 +178,7 @@ def main(opts=None):  # detext
     args = parser.parse_args(opts)
     # set up models
     w, h = 640, 120
-    clip_gap, frame_info, mask, reader, rec_time, video_name, writer = pre_process(args)
+    clip_gap, frame_info, mask, reader, rec_times, video_path, writer = pre_process(args)
     gpu_count = torch.cuda.device_count()
     print('Task: ', args.task)
     models = []
@@ -196,14 +196,14 @@ def main(opts=None):  # detext
     split_h = int(frame_info['w_ori'] * 3 / 16)
     mode = get_inpaint_mode_for_detext(frame_info['h_ori'], split_h, mask)
 
-    for i in range(rec_time):
+    ranges = [[int(i) for i in r.split('_')] for r in args.exclude_ranges]
+    for i in range(rec_times):
         start_f = i * clip_gap
         end_f = min((i + 1) * clip_gap, frame_info['len'])
         print('Processing:', start_f+1, '-', end_f, ' / Total:', frame_info['len'])
 
         frames_hr = []
         frames = {}
-        comps = {}
         for k in range(len(mode)):
             frames[k] = []
         for j in range(start_f, end_f):
@@ -214,41 +214,77 @@ def main(opts=None):  # detext
                 image_resize = cv2.resize(image_crop, (w, h))
                 frames[k].append(image_resize)
 
-        threads = [None] * gpu_count
+        _frames_hr = []
+        _frames = {}
+        _comps = {}
+        _states = []
         for k in range(len(mode)):
-            need_waiting = True
-            for thread in threads:
-                if thread is None:
-                    need_waiting = False
+            _frames[k] = []
+            _comps[k] = []
+        for j in range(len(frames_hr)):
+            msec = (j + start_f) * 1000 / frame_info['fps']
+            is_excluded = False
+            for r in ranges:
+                if r[0] <= msec <= r[1]:
+                    is_excluded = True
                     break
-            if need_waiting:
-                for thread in threads:
-                    thread.join()
-                threads = [None] * gpu_count
-            idx = k % gpu_count
-            t = ProcessThread(args, k, comps, frames, models[idx][0], models[idx][1], w, h)
-            t.start()
-            threads[idx] = t
-            #comps[k] = process(args, frames[k], model, device, w, h)
-        for thread in threads:
-            if thread is not None:
-                thread.join()
 
-        if mode is not []:
-            for j in range(end_f - start_f):
-                frame_ori = frames_hr[j].copy()
-                frame = frames_hr[j]
+            if len(_states) == 0 or _states[-1] != is_excluded:
+                _states.append(is_excluded)
+                _frames_hr.append([])
                 for k in range(len(mode)):
-                    comp = cv2.resize(comps[k][j], (frame_info['w_ori'], split_h))
-                    comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                    mask_area = mask[mode[k][0]:mode[k][1], :]
-                    frame[mode[k][0]:mode[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[mode[k][0]:mode[k][1], :, :]
-                if args.dual:
-                    frame = np.vstack([frame_ori, frame])
-                writer.write(frame)
+                    _frames[k].append([])
+                    _comps[k].append([])
+            _frames_hr[-1].append(frames_hr[j])
+            for k in range(len(mode)):
+                _frames[k][-1].append(frames[k][j])
+        print(f'Processing exclude time ranges, split into {len(_frames_hr)} segments')
+        for j in range(len(_frames_hr)):
+            if _states[j]:
+                for frame in _frames_hr[j]:
+                    writer.write(frame)
+            else:
+                frames_hr = _frames_hr[j]
+                frames = {}
+                comps = {}
+                for k in range(len(mode)):
+                    frames[k] = _frames[k][j]
+                    comps[k] = _comps[k][j]
+
+                threads = [None] * gpu_count
+                for k in range(len(mode)):
+                    need_waiting = True
+                    for thread in threads:
+                        if thread is None:
+                            need_waiting = False
+                            break
+                    if need_waiting:
+                        for thread in threads:
+                            thread.join()
+                        threads = [None] * gpu_count
+                    idx = k % gpu_count
+                    t = ProcessThread(args, k, comps, frames, models[idx][0], models[idx][1], w, h)
+                    t.start()
+                    threads[idx] = t
+                    #comps[k] = process(args, frames[k], model, device, w, h)
+                for thread in threads:
+                    if thread is not None:
+                        thread.join()
+
+                if mode is not []:
+                    for m in range(len(frames_hr)):
+                        frame_ori = frames_hr[m].copy()
+                        frame = frames_hr[m]
+                        for k in range(len(mode)):
+                            comp = cv2.resize(comps[k][m], (frame_info['w_ori'], split_h))
+                            comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
+                            mask_area = mask[mode[k][0]:mode[k][1], :]
+                            frame[mode[k][0]:mode[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[mode[k][0]:mode[k][1], :, :]
+                        if args.dual:
+                            frame = np.vstack([frame_ori, frame])
+                        writer.write(frame)
 
     writer.release()
-    video_path = str(Path(args.result) / f"{Path(args.video).stem}_{args.task}.mp4")
     out_path = str(Path(args.result) / f"{Path(args.video).stem}_out.mp4")
     command = 'ffmpeg -i {} -i {} -map 0:a -map 1:v -y {}'.format(args.video, video_path, out_path)
     subprocess.call(command, shell=platform.system() != 'Windows')
