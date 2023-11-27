@@ -29,7 +29,9 @@ from core.utils import Stack, ToTorchFormatTensor
 
 total_memory = torch.cuda.get_device_properties(0).total_memory
 fraction = 10*1024*1024*1024/total_memory
-torch.cuda.set_per_process_memory_fraction(fraction, 0)
+gpu_count = torch.cuda.device_count()
+for i in gpu_count:
+    torch.cuda.set_per_process_memory_fraction(fraction, i)
 _to_tensors = transforms.Compose([
     Stack(),
     ToTorchFormatTensor()])
