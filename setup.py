@@ -1,9 +1,9 @@
 # coding=utf-8
 from pathlib import Path
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
-NAME = 'video-wipe'
+NAME = 'video_wipe'
 DESCRIPTION = 'Video Auto Wipe'
 
 URL = 'https://github.com/passerbya/Video-Auto-Wipe'
@@ -31,9 +31,11 @@ setup(
     author_email=EMAIL,
     python_requires=REQUIRES_PYTHON,
     url=URL,
-    packages=find_packages(exclude=["pretrained_weight", "pic"]),
+    packages=find_packages('video_wipe'),
     install_requires=REQUIRED,
     include_package_data=True,
-    entry_points={},
+    entry_points={
+        'console_scripts': ['video_wipe=video_wipe.wipe:main'],
+    },
     license='GPL-3.0 license',
 )

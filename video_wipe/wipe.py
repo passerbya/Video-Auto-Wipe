@@ -20,16 +20,19 @@ import platform
 import threading
 from pathlib import Path
 from torchvision import transforms
+import sys
+sys.path.append(str(Path(__file__).absolute().parent))
+print(sys.path)
 
 # My libs
 from core.utils import Stack, ToTorchFormatTensor
 
-_to_tensors = transforms.Compose([
-    Stack(),
-    ToTorchFormatTensor()])
 total_memory = torch.cuda.get_device_properties(0).total_memory
 fraction = 10*1024*1024*1024/total_memory
 torch.cuda.set_per_process_memory_fraction(fraction, 0)
+_to_tensors = transforms.Compose([
+    Stack(),
+    ToTorchFormatTensor()])
 
 def get_parser():
     parser = argparse.ArgumentParser(description="STTN")
@@ -48,6 +51,7 @@ def get_parser():
     parser.add_argument("-g", "--gap",   type=int, default=200, help='set it higher and get result better')
     parser.add_argument("-l", "--ref_length",   type=int, default=5)
     parser.add_argument("-n", "--neighbor_stride",   type=int, default=5)
+    parser.add_argument("-m", "--multi_gpu", type=bool, default=True, help='Whether to use multi-gpu')
 
     return parser
 
@@ -179,10 +183,13 @@ def main(opts=None):  # detext
     # set up models
     w, h = 640, 120
     clip_gap, frame_info, mask, reader, rec_times, video_path, writer = pre_process(args)
-    gpu_count = torch.cuda.device_count()
     print('Task: ', args.task)
     models = []
-    print('gpu_count:', gpu_count)
+    if args.multi_gpu:
+        gpu_count = torch.cuda.device_count()
+        print('gpu_count:', gpu_count)
+    else:
+        gpu_count = 1
     for i in range(gpu_count):
         device = torch.device(f"cuda:{i}")
         net = importlib.import_module('model.' + args.model)
