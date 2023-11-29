@@ -31,7 +31,7 @@ setup(
     author_email=EMAIL,
     python_requires=REQUIRES_PYTHON,
     url=URL,
-    packages=find_packages('video_wipe'),
+    packages=find_packages('.'),
     install_requires=REQUIRED,
     include_package_data=True,
     entry_points={
