@@ -27,6 +27,8 @@ print(sys.path)
 # My libs
 from core.utils import Stack, ToTorchFormatTensor
 
+ffmpegExe = "/usr/local/ffmpeg/bin/ffmpeg"
+ffprobeExe = "/usr/local/ffmpeg/bin/ffprobe"
 total_memory = torch.cuda.get_device_properties(0).total_memory
 fraction = 10*1024*1024*1024/total_memory
 gpu_count = torch.cuda.device_count()
@@ -78,6 +80,15 @@ def get_ref_index(neighbor_ids, length, ref_length):
         if not i in neighbor_ids:
             ref_index.append(i)
     return ref_index
+
+def check_file_has_audio(f):
+    analysis_cmd = '%s -v quiet -select_streams a -show_entries stream=codec_name,channels,sample_rate -of default=nokey=1:noprint_wrappers=1 -i "%s"' % (ffprobeExe, f)
+    try:
+        probe_out = subprocess.check_output(analysis_cmd, shell=True).decode('utf-8', 'ignore')
+        return len(probe_out) > 0 and probe_out.find('N/A') == -1
+    except Exception:
+        # logger.exception("")
+        return False
 
 def pre_process(args):
     # prepare dataset, encode all frames into deep space
@@ -295,8 +306,12 @@ def main(opts=None):  # detext
 
     writer.release()
     out_path = str(Path(args.result) / f"{Path(args.video).stem}_out.mp4")
-    command = 'ffmpeg -i {} -i {} -map 0:a -map 1:v -y {}'.format(args.video, video_path, out_path)
-    subprocess.call(command, shell=platform.system() != 'Windows')
+    if check_file_has_audio(args.video):
+        command = '{} -i {} -i {} -map 0:a -map 1:v -y {}'.format(ffmpegExe, args.video, video_path, out_path)
+        subprocess.call(command, shell=platform.system() != 'Windows')
+    else:
+        os.rename(video_path, out_path)
+
     print('--------------------------------------')
     print('Finish in {}'.format(out_path))
 
