@@ -307,10 +307,10 @@ def main(opts=None):  # detext
     writer.release()
     out_path = str(Path(args.result) / f"{Path(args.video).stem}_out.mp4")
     if check_file_has_audio(args.video):
-        analysis_cmd = '%s -v quiet -of default=nokey=1:noprint_wrappers=1 -select_streams a -show_entries stream=bit_rate -i "%s"' % (ffprobeExe, video_path)
+        analysis_cmd = '%s -v quiet -of default=nokey=1:noprint_wrappers=1 -select_streams a -show_entries stream=bit_rate -i "%s"' % (ffprobeExe, args.video)
         a_out = subprocess.check_output(analysis_cmd, shell=True).decode('utf-8', 'ignore')
 
-        analysis_cmd = '%s -v quiet -of default=nokey=1:noprint_wrappers=1 -select_streams v -show_entries stream=bit_rate -i "%s"' % (ffprobeExe, args.video)
+        analysis_cmd = '%s -v quiet -of default=nokey=1:noprint_wrappers=1 -select_streams v -show_entries stream=bit_rate -i "%s"' % (ffprobeExe, video_path)
         v_out = subprocess.check_output(analysis_cmd, shell=True).decode('utf-8', 'ignore')
         command = '{} -i {} -i {} -map 0:a -map 1:v -b:v {} -b:a {} -y {}'.format(ffmpegExe, args.video, video_path, v_out.strip(), a_out.strip(), out_path)
         subprocess.call(command, shell=platform.system() != 'Windows')
