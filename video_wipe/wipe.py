@@ -52,7 +52,7 @@ def get_parser():
     parser.add_argument("-w", "--weight",   type=str, default='pretrained_weight/detext_trial.pth')
 
     parser.add_argument("--model", type=str, default='auto-sttn')
-    parser.add_argument("-g", "--gap",   type=int, default=200, help='set it higher and get result better')
+    parser.add_argument("-g", "--gap",   type=int, default=100, help='set it higher and get result better')
     parser.add_argument("-l", "--ref_length",   type=int, default=5)
     parser.add_argument("-n", "--neighbor_stride",   type=int, default=5)
     parser.add_argument("-m", "--multi_gpu", type=bool, default=True, help='Whether to use multi-gpu')
