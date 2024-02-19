@@ -215,8 +215,10 @@ def main(opts=None):  # detext
 
     split_h = int(frame_info['w_ori'] * 3 / 16)
     mode = get_inpaint_mode_for_detext(frame_info['h_ori'], split_h, mask)
-
-    ranges = [[int(i) for i in r.split('_')] for r in args.exclude_ranges]
+    if args.exclude_ranges is None:
+        ranges = []
+    else:
+        ranges = [[int(i) for i in r.split('_')] for r in args.exclude_ranges]
     for i in range(rec_times):
         start_f = i * clip_gap
         end_f = min((i + 1) * clip_gap, frame_info['len'])
