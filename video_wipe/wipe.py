@@ -17,7 +17,6 @@ import torch
 import os
 import subprocess
 import platform
-import threading
 from pathlib import Path
 from torchvision import transforms
 import sys
@@ -29,11 +28,6 @@ from core.utils import Stack, ToTorchFormatTensor
 
 ffmpegExe = "/usr/local/ffmpeg/bin/ffmpeg"
 ffprobeExe = "/usr/local/ffmpeg/bin/ffprobe"
-total_memory = torch.cuda.get_device_properties(0).total_memory
-fraction = 10*1024*1024*1024/total_memory
-gpu_count = torch.cuda.device_count()
-for i in range(gpu_count):
-    torch.cuda.set_per_process_memory_fraction(fraction, i)
 _to_tensors = transforms.Compose([
     Stack(),
     ToTorchFormatTensor()])
@@ -55,7 +49,6 @@ def get_parser():
     parser.add_argument("-g", "--gap",   type=int, default=100, help='set it higher and get result better')
     parser.add_argument("-l", "--ref_length",   type=int, default=5)
     parser.add_argument("-n", "--neighbor_stride",   type=int, default=5)
-    parser.add_argument("-m", "--multi_gpu", type=bool, default=True, help='Whether to use multi-gpu')
 
     return parser
 
@@ -66,12 +59,6 @@ def read_frame_info_from_video(args):
         sys.exit(1)
     frame_info = {'w_ori': int(reader.get(cv2.CAP_PROP_FRAME_WIDTH)), 'h_ori': int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT)), 'fps': reader.get(cv2.CAP_PROP_FPS), 'len': int(reader.get(cv2.CAP_PROP_FRAME_COUNT))}
     return reader, frame_info
-
-def read_mask(path):
-    img = cv2.imread(path, 0)
-    ret, img = cv2.threshold(img, 127, 1, cv2.THRESH_BINARY)
-    img = img[:, :, None]
-    return img
 
 # sample reference frames from the whole video
 def get_ref_index(neighbor_ids, length, ref_length):
@@ -174,43 +161,19 @@ def get_inpaint_mode_for_detext(h_ori, h, mask):  # get inpaint segment
         to_h -= h
     return mode
 
-class ProcessThread(threading.Thread):
-    def __init__(self, args, k, comps, frames, model, device, w, h):
-        threading.Thread.__init__(self)
-        self.setDaemon(True)
-        self.args = args
-        self.k = k
-        self.comps = comps
-        self.frames = frames
-        self.model = model
-        self.device = device
-        self.w = w
-        self.h = h
-
-    def run(self):
-        self.comps[self.k] = process(self.args, self.frames[self.k], self.model, self.device, self.w, self.h)
-
 def main(opts=None):  # detext
     parser = get_parser()
     args = parser.parse_args(opts)
-    # set up models
+    # set up model
     w, h = 640, 120
     clip_gap, frame_info, mask, reader, rec_times, video_path, writer = pre_process(args)
     print('Task: ', args.task)
-    models = []
-    if args.multi_gpu:
-        gpu_count = torch.cuda.device_count()
-        print('gpu_count:', gpu_count)
-    else:
-        gpu_count = 1
-    for i in range(gpu_count):
-        device = torch.device(f"cuda:{i}")
-        net = importlib.import_module('model.' + args.model)
-        model = net.InpaintGenerator().to(device)
-        data = torch.load(args.weight, map_location=device)
-        model.load_state_dict(data['netG'])
-        model.eval()
-        models.append((model, device))
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    net = importlib.import_module('model.' + args.model)
+    model = net.InpaintGenerator().to(device)
+    data = torch.load(args.weight, map_location=device)
+    model.load_state_dict(data['netG'])
+    model.eval()
     print('Loading weight from: {}'.format(args.weight))
 
     split_h = int(frame_info['w_ori'] * 3 / 16)
@@ -272,39 +235,19 @@ def main(opts=None):  # detext
                 for k in range(len(mode)):
                     frames[k] = _frames[k][j]
                     comps[k] = _comps[k][j]
+                    comps[k] = process(args, frames[k], model, device, w, h)
 
-                threads = [None] * gpu_count
-                for k in range(len(mode)):
-                    need_waiting = True
-                    for thread in threads:
-                        if thread is None:
-                            need_waiting = False
-                            break
-                    if need_waiting:
-                        for thread in threads:
-                            thread.join()
-                        threads = [None] * gpu_count
-                    idx = k % gpu_count
-                    t = ProcessThread(args, k, comps, frames, models[idx][0], models[idx][1], w, h)
-                    t.start()
-                    threads[idx] = t
-                    #comps[k] = process(args, frames[k], model, device, w, h)
-                for thread in threads:
-                    if thread is not None:
-                        thread.join()
-
-                if mode is not []:
-                    for m in range(len(frames_hr)):
-                        frame_ori = frames_hr[m].copy()
-                        frame = frames_hr[m]
-                        for k in range(len(mode)):
-                            comp = cv2.resize(comps[k][m], (frame_info['w_ori'], split_h))
-                            comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                            mask_area = mask[mode[k][0]:mode[k][1], :]
-                            frame[mode[k][0]:mode[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[mode[k][0]:mode[k][1], :, :]
-                        if args.dual:
-                            frame = np.vstack([frame_ori, frame])
-                        writer.write(frame)
+                for m in range(len(frames_hr)):
+                    frame_ori = frames_hr[m].copy()
+                    frame = frames_hr[m]
+                    for k in range(len(mode)):
+                        comp = cv2.resize(comps[k][m], (frame_info['w_ori'], split_h))
+                        comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
+                        mask_area = mask[mode[k][0]:mode[k][1], :]
+                        frame[mode[k][0]:mode[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[mode[k][0]:mode[k][1], :, :]
+                    if args.dual:
+                        frame = np.vstack([frame_ori, frame])
+                    writer.write(frame)
 
     writer.release()
     out_path = str(Path(args.result) / f"{Path(args.video).stem}_out.mp4")
